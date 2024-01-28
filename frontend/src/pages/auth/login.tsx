@@ -3,6 +3,7 @@ import { GetServerSideProps } from "next";
 import { useRouter } from "next/router";
 import { getServerSession } from "next-auth";
 import { signIn } from "next-auth/react";
+import { relayInit } from "nostr-tools";
 
 import { authService } from "~/services";
 import { MainLayout, Meta } from "~/components/layouts";
@@ -10,13 +11,50 @@ import { Button, Input, Logo } from "~/components/ui";
 import { getPrivateKey, persistPrivateKey } from "~/utils/auth";
 
 import { authOptions } from "../api/auth/[...nextauth]";
+import dayjs from "dayjs";
+
+const serverPublicKey = process.env.NEXT_PUBLIC_FUSION_NOSTR_PUBLIC_KEY || "";
+const fusionRelayUrl = process.env.NEXT_PUBLIC_FUSION_RELAY_URL || "";
 
 const LoginPage = React.memo(() => {
   const router = useRouter();
+  const relay = relayInit(fusionRelayUrl);
+
+  const [authSubscription, setAuthSubscription] = useState<any>(null);
+
   const [publicKey, setPublicKey] = useState("");
   const [privateKey, setPrivateKey] = useState("");
   const [showInput, setShowInput] = useState(false);
   const [showNostrExtensionLogin, setShowNostrExtensionLogin] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      relay.on("connect", () => {
+        console.log(`connected to ${relay.url}`);
+      });
+      relay.on("error", () => {
+        console.log(`failed to connect to ${relay.url}`);
+      });
+      await relay.connect();
+
+      const loginTimestamp = dayjs().unix();
+      let sub = relay.sub([
+        {
+          authors: [serverPublicKey!],
+          kinds: [4],
+          "#p": [publicKey],
+          since: loginTimestamp,
+        },
+      ]);
+
+      setAuthSubscription(sub);
+    })();
+
+    return () => {
+      relay.close();
+      console.log("closed relay connection");
+    };
+  }, []);
 
   useEffect(() => {
     // @ts-ignore
@@ -62,7 +100,12 @@ const LoginPage = React.memo(() => {
   };
 
   const completeNostrLogin = async (publicKey: string, privateKey?: string) => {
-    const authObject = await authService.completeNostrLogin(publicKey, privateKey);
+    if (!authSubscription) {
+      console.error("No auth subscription");
+      return;
+    }
+
+    const authObject = await authService.completeNostrLogin(authSubscription, publicKey, privateKey);
 
     console.log(authObject);
     if (authObject) {

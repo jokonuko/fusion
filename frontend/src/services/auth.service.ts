@@ -1,5 +1,4 @@
-import dayjs from "dayjs";
-import { nip19, nip04, relayInit } from "nostr-tools";
+import { nip19, nip04, Sub } from "nostr-tools";
 
 import { api } from "~/config";
 
@@ -9,39 +8,24 @@ interface AuthResponse {
 }
 
 class AuthService {
-  async completeNostrLogin(publicKey: string, privateKey?: string): Promise<AuthResponse | null> {
-    const serverPublicKey = process.env.NEXT_PUBLIC_FUSION_NOSTR_PUBLIC_KEY;
-
+  async completeNostrLogin(authSubscription: Sub, publicKey: string, privateKey?: string): Promise<AuthResponse | null> {
     try {
-      const relay = relayInit(process.env.NEXT_PUBLIC_FUSION_RELAY_URL!);
-      relay.on("connect", () => {
-        console.log(`connected to ${relay.url}`);
-      });
-      relay.on("error", () => {
-        console.log(`failed to connect to ${relay.url}`);
-      });
-      await relay.connect();
-      
-      const loginTimestamp = dayjs().unix();
-      let sub = relay.sub([
-        {
-          authors: [serverPublicKey!],
-          kinds: [4],
-          "#p": [publicKey],
-          since: loginTimestamp,
-        },
-      ]);
-
+      console.log("completeNostrLogin", authSubscription, publicKey, privateKey);
       const res = await api.post(`/nostrlogin`, { pubkey: publicKey });
+
+      console.log(res);
+
       const authToken: string = await (async () => {
         return new Promise((resolve) => {
-          sub.on("event", async (event) => {
+          authSubscription.on("event", async (event) => {
             // @ts-ignore
             const decoded = privateKey ? await nip04.decrypt(privateKey, serverPublicKey!, event.content) : await window.nostr?.nip04.decrypt(serverPublicKey!, event.content);
             resolve(decoded);
           });
         });
       })();
+
+      console.log("posting lofin", authToken)
 
       if (res.status == 200 && authToken) {
         return {
