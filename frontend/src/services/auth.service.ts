@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
-import { nip19, nip04, relayInit } from "nostr-tools";
+import { get } from "http";
+import { Relay, nip19, nip04, Sub } from "nostr-tools";
 
 import { api } from "~/config";
 
@@ -8,46 +9,61 @@ interface AuthResponse {
   authToken: string;
 }
 
-class AuthService {
+export class AuthService {
+  private relay: Relay;
+
+  constructor(relay: Relay) {
+    this.relay = relay;
+  }
+
   async completeNostrLogin(publicKey: string, privateKey?: string): Promise<AuthResponse | null> {
     const serverPublicKey = process.env.NEXT_PUBLIC_FUSION_NOSTR_PUBLIC_KEY;
 
     try {
-      const relay = relayInit(process.env.NEXT_PUBLIC_FUSION_RELAY_URL!);
-      relay.on("connect", () => {
-        console.log(`connected to ${relay.url}`);
-      });
-      relay.on("error", () => {
-        console.log(`failed to connect to ${relay.url}`);
-      });
-      await relay.connect();
-      
-      const loginTimestamp = dayjs().unix();
-      let sub = relay.sub([
-        {
-          authors: [serverPublicKey!],
-          kinds: [4],
-          "#p": [publicKey],
-          since: loginTimestamp,
-        },
-      ]);
+      const filter =
+      {
+        authors: [serverPublicKey!],
+        kinds: [4],
+        "#p": [publicKey],
+        since: dayjs().unix(),
+        limit: 1,
+      };
+
+      const getToken = async (): Promise<string> => {
+        const event = await this.relay.get(filter);
+        if (event) {
+          // @ts-ignore
+          const decoded: string = privateKey ? await nip04.decrypt(privateKey, serverPublicKey!, event.content) : await window.nostr?.nip04.decrypt(serverPublicKey!, event.content);
+          return decoded;
+        }
+        return '';
+      }
 
       const res = await api.post(`/nostrlogin`, { pubkey: publicKey });
-      const authToken: string = await (async () => {
-        return new Promise((resolve) => {
-          sub.on("event", async (event) => {
-            // @ts-ignore
-            const decoded = privateKey ? await nip04.decrypt(privateKey, serverPublicKey!, event.content) : await window.nostr?.nip04.decrypt(serverPublicKey!, event.content);
-            resolve(decoded);
-          });
-        });
-      })();
 
-      if (res.status == 200 && authToken) {
-        return {
-          userNpub: nip19.npubEncode(publicKey),
-          authToken: authToken,
-        };
+      if (res.status === 200) {
+        return new Promise((resolve, reject) => {
+          let retryCount = 0;
+          let interval = setInterval(async () => {
+            let authToken = '';
+            if (!authToken && retryCount < 10) {
+              authToken = await getToken();
+              console.log('authToken', authToken);
+              console.log('retryCount', retryCount);
+              if (authToken) {
+                clearInterval(interval);
+                resolve({
+                  userNpub: nip19.npubEncode(publicKey),
+                  authToken,
+                });
+              }
+              retryCount++;
+            } else {
+              clearInterval(interval);
+              reject(null);
+            }
+          }, 100);
+        });
       } else {
         return null;
       }
@@ -58,4 +74,3 @@ class AuthService {
   }
 }
 
-export const authService = Object.freeze(new AuthService());

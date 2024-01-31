@@ -4,19 +4,52 @@ import { useRouter } from "next/router";
 import { getServerSession } from "next-auth";
 import { signIn } from "next-auth/react";
 
-import { authService } from "~/services";
+import { AuthService } from "~/services";
 import { MainLayout, Meta } from "~/components/layouts";
 import { Button, Input, Logo } from "~/components/ui";
 import { getPrivateKey, persistPrivateKey } from "~/utils/auth";
 
 import { authOptions } from "../api/auth/[...nextauth]";
+import { relayInit } from "nostr-tools";
+
+const fusionRelayUrl = process.env.NEXT_PUBLIC_FUSION_RELAY_URL || "";
 
 const LoginPage = React.memo(() => {
   const router = useRouter();
+  const relay = relayInit(fusionRelayUrl);
+  const [relayConected, setRelayConnected] = useState(false);
+
   const [publicKey, setPublicKey] = useState("");
   const [privateKey, setPrivateKey] = useState("");
   const [showInput, setShowInput] = useState(false);
   const [showNostrExtensionLogin, setShowNostrExtensionLogin] = useState(false);
+
+  const [error, setError] = useState("");
+
+  const connectRelay = async () => {
+    try {
+      relay.on("connect", () => {
+        console.log(`connected to ${relay.url}`);
+      });
+      relay.on("error", () => {
+        console.log(`relay connection error: ${relay.url}`);
+        setError("error on authentication relay");
+      });
+      await relay.connect();
+      setRelayConnected(true);
+    } catch (error) {
+      console.error(error);
+      setError("failed to connect to authentication relay");
+    }
+  };
+
+  useEffect(() => {
+    connectRelay();
+
+    return () => {
+      relay.close();
+    };
+  }, []);
 
   useEffect(() => {
     // @ts-ignore
@@ -27,9 +60,10 @@ const LoginPage = React.memo(() => {
     try {
       const privateKey = getPrivateKey();
       const { publicKey } = await persistPrivateKey(privateKey);
-      completeNostrLogin(publicKey, privateKey);
+      await completeNostrLogin(publicKey, privateKey);
     } catch (error) {
       console.error(error);
+      setError("error logging in using guest account");
     }
   };
 
@@ -39,12 +73,13 @@ const LoginPage = React.memo(() => {
       const nostr = global.window.nostr;
       if (nostr) {
         const publicKey = await nostr.getPublicKey();
-        completeNostrLogin(publicKey, privateKey);
+        await completeNostrLogin(publicKey, privateKey);
       } else {
         console.error("Nostr extension not installed");
       }
     } catch (error) {
       console.error(error);
+      setError("error logging in using nostr extension");
     }
   };
 
@@ -58,10 +93,16 @@ const LoginPage = React.memo(() => {
       setPublicKey(publicKey);
     } catch (error) {
       console.error(error);
+      setError("error logging in using existing account");
     }
   };
 
   const completeNostrLogin = async (publicKey: string, privateKey?: string) => {
+    setError("");
+    if (!relayConected) {
+      await connectRelay();
+    }
+    const authService = new AuthService(relay);
     const authObject = await authService.completeNostrLogin(publicKey, privateKey);
 
     console.log(authObject);
@@ -73,8 +114,7 @@ const LoginPage = React.memo(() => {
         callbackUrl: router.query.callbackUrl?.toString(),
       });
     } else {
-      // TODO: render error message
-      console.error("Error logging in");
+      setError("error logging in");
     }
   };
 
@@ -127,6 +167,7 @@ const LoginPage = React.memo(() => {
               </Button>
             </div>
           )}
+          {error && <p className="text-red-500">{error}</p>}
         </div>
       </div>
     </MainLayout>
