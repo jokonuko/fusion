@@ -42,9 +42,9 @@ export class AuthService {
       const res = await api.post(`/nostrlogin`, { pubkey: publicKey });
 
       if (res.status === 200) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve) => {
           let retryCount = 0;
-          let interval = setInterval(async () => {
+          const retryGetRoken = async (interval: NodeJS.Timer) => {
             let authToken = '';
             if (!authToken && retryCount < 10) {
               authToken = await getToken();
@@ -52,7 +52,7 @@ export class AuthService {
               console.log('retryCount', retryCount);
               if (authToken) {
                 clearInterval(interval);
-                resolve({
+                return resolve({
                   userNpub: nip19.npubEncode(publicKey),
                   authToken,
                 });
@@ -60,9 +60,10 @@ export class AuthService {
               retryCount++;
             } else {
               clearInterval(interval);
-              reject(null);
+              return null;
             }
-          }, 100);
+          };
+          const interval: NodeJS.Timer = setInterval(() => retryGetRoken(interval), 100);
         });
       } else {
         return null;
